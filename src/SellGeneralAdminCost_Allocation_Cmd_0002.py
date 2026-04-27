@@ -7422,11 +7422,17 @@ def _build_all_management_data_by_com(
     objOrderedSourcePaths: List[str],
     pszOutputPath: str,
     pfnLog: Optional[Callable[[str, str], None]] = None,
+    pfnDiagLog: Optional[Callable[[str, str], None]] = None,
 ) -> None:
     def write_log(pszLevel: str, pszMessage: str) -> None:
         if pfnLog is None:
             return
         pfnLog(pszLevel, pszMessage)
+
+    def write_diag_log(pszLevel: str, pszMessage: str) -> None:
+        if pfnDiagLog is None:
+            return
+        pfnDiagLog(pszLevel, pszMessage)
 
     if not objOrderedSourcePaths:
         raise ValueError("source paths are empty")
@@ -7440,9 +7446,60 @@ def _build_all_management_data_by_com(
     objExcel.Visible = False
     objExcel.DisplayAlerts = False
     objTargetWorkbook = None
+
+    def get_active_workbook_name() -> str:
+        try:
+            objActiveWorkbook = objExcel.ActiveWorkbook
+            if objActiveWorkbook is None:
+                return "<None>"
+            return str(objActiveWorkbook.Name)
+        except Exception:  # noqa: BLE001
+            return "<Unavailable>"
+
+    def get_target_workbook_name() -> str:
+        if objTargetWorkbook is None:
+            return "<None>"
+        try:
+            return str(objTargetWorkbook.Name)
+        except Exception:  # noqa: BLE001
+            return "<Unavailable>"
+
+    def get_target_sheet_count() -> str:
+        if objTargetWorkbook is None:
+            return "<None>"
+        try:
+            return str(objTargetWorkbook.Worksheets.Count)
+        except Exception:  # noqa: BLE001
+            return "<Unavailable>"
+
+    def get_target_workbook_full_name() -> str:
+        if objTargetWorkbook is None:
+            return "<None>"
+        try:
+            return str(objTargetWorkbook.FullName)
+        except Exception:  # noqa: BLE001
+            return "<Unavailable>"
+
+    def get_file_state(pszPath: str) -> str:
+        try:
+            if not os.path.exists(pszPath):
+                return "exists=False size=-1 mtime=-1"
+            iSize: int = os.path.getsize(pszPath)
+            fMtime: float = os.path.getmtime(pszPath)
+            return f"exists=True size={iSize} mtime={fMtime}"
+        except Exception:  # noqa: BLE001
+            return "exists=<Unavailable> size=<Unavailable> mtime=<Unavailable>"
+
     try:
         write_log("INFO", f"Base workbook = {objOrderedSourcePaths[0]}")
         objTargetWorkbook = objExcel.Workbooks.Open(os.path.abspath(objOrderedSourcePaths[0]))
+        write_diag_log(
+            "INFO",
+            "phase=T1 action=OPEN "
+            f"target_workbook_name={get_target_workbook_name()} "
+            f"target_sheet_count={get_target_sheet_count()} "
+            f"active_workbook_name={get_active_workbook_name()}",
+        )
         write_log("INFO", "Start merging additional workbooks")
         for pszSourcePath in objOrderedSourcePaths[1:]:
             write_log("INFO", f"Processing file = {pszSourcePath}")
@@ -7452,17 +7509,57 @@ def _build_all_management_data_by_com(
                 write_log("INFO", f"Sheet count = {iSheetCount}")
                 for iIndex in range(1, iSheetCount + 1):
                     pszSheetName: str = str(objSourceWorkbook.Worksheets(iIndex).Name)
+                    iBeforeTargetSheetCount: int = int(objTargetWorkbook.Worksheets.Count)
+                    write_diag_log(
+                        "INFO",
+                        "phase=T2 action=COPY_BEFORE "
+                        f"target_workbook_name={get_target_workbook_name()} "
+                        f"target_sheet_count={get_target_sheet_count()} "
+                        f"active_workbook_name={get_active_workbook_name()} "
+                        f"source_workbook_name={os.path.basename(pszSourcePath)} "
+                        f"source_sheet_name={pszSheetName}",
+                    )
                     write_log("INFO", f"Copy sheet start = {pszSheetName}")
                     try:
                         objSourceWorkbook.Worksheets(iIndex).Copy(
                             After=objTargetWorkbook.Worksheets(objTargetWorkbook.Worksheets.Count)
                         )
                         write_log("INFO", f"Copy success = {pszSheetName}")
+                        iAfterTargetSheetCount: int = int(objTargetWorkbook.Worksheets.Count)
+                        if iAfterTargetSheetCount <= iBeforeTargetSheetCount:
+                            write_diag_log(
+                                "WARN",
+                                "phase=T3 action=COPY_AFTER_NO_INCREASE "
+                                f"target_workbook_name={get_target_workbook_name()} "
+                                f"target_sheet_count={get_target_sheet_count()} "
+                                f"active_workbook_name={get_active_workbook_name()} "
+                                f"source_workbook_name={os.path.basename(pszSourcePath)} "
+                                f"source_sheet_name={pszSheetName} "
+                                f"before_target_sheet_count={iBeforeTargetSheetCount} "
+                                f"after_target_sheet_count={iAfterTargetSheetCount}",
+                            )
+                        write_diag_log(
+                            "INFO",
+                            "phase=T3 action=COPY_AFTER "
+                            f"target_workbook_name={get_target_workbook_name()} "
+                            f"target_sheet_count={get_target_sheet_count()} "
+                            f"active_workbook_name={get_active_workbook_name()} "
+                            f"source_workbook_name={os.path.basename(pszSourcePath)} "
+                            f"source_sheet_name={pszSheetName}",
+                        )
                     except Exception as exc:  # noqa: BLE001
                         write_log("ERROR", f"Copy failed = {pszSheetName}")
                         write_log("ERROR", f"Exception = {exc}")
                         raise
             finally:
+                write_diag_log(
+                    "INFO",
+                    "phase=T4 action=CLOSE_BEFORE "
+                    f"target_workbook_name={get_target_workbook_name()} "
+                    f"target_sheet_count={get_target_sheet_count()} "
+                    f"active_workbook_name={get_active_workbook_name()} "
+                    f"source_workbook_name={os.path.basename(pszSourcePath)}",
+                )
                 objSourceWorkbook.Close(SaveChanges=False)
                 write_log("INFO", f"Closed workbook = {pszSourcePath}")
 
@@ -7474,9 +7571,44 @@ def _build_all_management_data_by_com(
             objSheet.Name = pszUniqueName
             objSeenNames.add(pszUniqueName)
 
+        write_diag_log(
+            "INFO",
+            "phase=T5 action=SAVEAS_BEFORE "
+            f"target_workbook_name={get_target_workbook_name()} "
+            f"target_workbook_full_name={get_target_workbook_full_name()} "
+            f"target_sheet_count={get_target_sheet_count()} "
+            f"active_workbook_name={get_active_workbook_name()} "
+            f"output_path={os.path.abspath(pszOutputPath)} "
+            f"output_file_state={get_file_state(os.path.abspath(pszOutputPath))} "
+            f"source_workbook_name=<None> source_sheet_name=<None>",
+        )
         write_log("INFO", f"Saving as = {pszOutputPath}")
         objTargetWorkbook.SaveAs(os.path.abspath(pszOutputPath), FileFormat=51)
         write_log("INFO", "Save complete")
+        objSavedWorkbook = None
+        try:
+            objSavedWorkbook = objExcel.Workbooks.Open(os.path.abspath(pszOutputPath))
+            write_diag_log(
+                "INFO",
+                "phase=T6 action=SAVEAS_VERIFY_OPEN "
+                f"saved_workbook_name={str(objSavedWorkbook.Name)} "
+                f"saved_workbook_sheet_count={str(objSavedWorkbook.Worksheets.Count)} "
+                f"saved_workbook_full_name={str(objSavedWorkbook.FullName)}",
+            )
+        finally:
+            if objSavedWorkbook is not None:
+                objSavedWorkbook.Close(SaveChanges=False)
+        write_diag_log(
+            "INFO",
+            "phase=T6 action=SAVEAS_AFTER "
+            f"target_workbook_name={get_target_workbook_name()} "
+            f"target_workbook_full_name={get_target_workbook_full_name()} "
+            f"target_sheet_count={get_target_sheet_count()} "
+            f"active_workbook_name={get_active_workbook_name()} "
+            f"output_path={os.path.abspath(pszOutputPath)} "
+            f"output_file_state={get_file_state(os.path.abspath(pszOutputPath))} "
+            f"source_workbook_name=<None> source_sheet_name=<None>",
+        )
     finally:
         if objTargetWorkbook is not None:
             objTargetWorkbook.Close(SaveChanges=False)
@@ -7777,11 +7909,22 @@ def create_all_management_data_excel(pszDirectory: str) -> Optional[str]:
 
     pszOutputPath: str = os.path.join(pszDirectory, "All_経営管理データ.xlsx")
     pszLogPath: str = os.path.join(pszDirectory, "All_経営管理データ_log.txt")
+    pszDiagLogPath: str = os.path.join(
+        pszDirectory,
+        f"All_経営管理データ_diag_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log.txt",
+    )
     pszRunId: str = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8]
 
     def write_all_management_log(pszLevel: str, pszMessage: str) -> None:
         pszTimestamp: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(pszLogPath, "a", encoding="utf-8", newline="\n") as objLogFile:
+            objLogFile.write(
+                f"[{pszTimestamp}] {pszLevel} run_id={pszRunId} {pszMessage}\n"
+            )
+
+    def write_all_management_diag_log(pszLevel: str, pszMessage: str) -> None:
+        pszTimestamp: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(pszDiagLogPath, "a", encoding="utf-8", newline="\n") as objLogFile:
             objLogFile.write(
                 f"[{pszTimestamp}] {pszLevel} run_id={pszRunId} {pszMessage}\n"
             )
@@ -7809,6 +7952,7 @@ def create_all_management_data_excel(pszDirectory: str) -> Optional[str]:
                 objOrderedSourcePaths,
                 pszOutputPath,
                 pfnLog=write_all_management_log,
+                pfnDiagLog=write_all_management_diag_log,
             )
             record_created_file(pszOutputPath)
             return pszOutputPath
