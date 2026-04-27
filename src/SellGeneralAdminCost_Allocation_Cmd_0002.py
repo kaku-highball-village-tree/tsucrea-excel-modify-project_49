@@ -7472,6 +7472,24 @@ def _build_all_management_data_by_com(
         except Exception:  # noqa: BLE001
             return "<Unavailable>"
 
+    def get_target_workbook_full_name() -> str:
+        if objTargetWorkbook is None:
+            return "<None>"
+        try:
+            return str(objTargetWorkbook.FullName)
+        except Exception:  # noqa: BLE001
+            return "<Unavailable>"
+
+    def get_file_state(pszPath: str) -> str:
+        try:
+            if not os.path.exists(pszPath):
+                return "exists=False size=-1 mtime=-1"
+            iSize: int = os.path.getsize(pszPath)
+            fMtime: float = os.path.getmtime(pszPath)
+            return f"exists=True size={iSize} mtime={fMtime}"
+        except Exception:  # noqa: BLE001
+            return "exists=<Unavailable> size=<Unavailable> mtime=<Unavailable>"
+
     try:
         write_log("INFO", f"Base workbook = {objOrderedSourcePaths[0]}")
         objTargetWorkbook = objExcel.Workbooks.Open(os.path.abspath(objOrderedSourcePaths[0]))
@@ -7491,6 +7509,7 @@ def _build_all_management_data_by_com(
                 write_log("INFO", f"Sheet count = {iSheetCount}")
                 for iIndex in range(1, iSheetCount + 1):
                     pszSheetName: str = str(objSourceWorkbook.Worksheets(iIndex).Name)
+                    iBeforeTargetSheetCount: int = int(objTargetWorkbook.Worksheets.Count)
                     write_diag_log(
                         "INFO",
                         "phase=T2 action=COPY_BEFORE "
@@ -7506,6 +7525,19 @@ def _build_all_management_data_by_com(
                             After=objTargetWorkbook.Worksheets(objTargetWorkbook.Worksheets.Count)
                         )
                         write_log("INFO", f"Copy success = {pszSheetName}")
+                        iAfterTargetSheetCount: int = int(objTargetWorkbook.Worksheets.Count)
+                        if iAfterTargetSheetCount <= iBeforeTargetSheetCount:
+                            write_diag_log(
+                                "WARN",
+                                "phase=T3 action=COPY_AFTER_NO_INCREASE "
+                                f"target_workbook_name={get_target_workbook_name()} "
+                                f"target_sheet_count={get_target_sheet_count()} "
+                                f"active_workbook_name={get_active_workbook_name()} "
+                                f"source_workbook_name={os.path.basename(pszSourcePath)} "
+                                f"source_sheet_name={pszSheetName} "
+                                f"before_target_sheet_count={iBeforeTargetSheetCount} "
+                                f"after_target_sheet_count={iAfterTargetSheetCount}",
+                            )
                         write_diag_log(
                             "INFO",
                             "phase=T3 action=COPY_AFTER "
@@ -7543,19 +7575,38 @@ def _build_all_management_data_by_com(
             "INFO",
             "phase=T5 action=SAVEAS_BEFORE "
             f"target_workbook_name={get_target_workbook_name()} "
+            f"target_workbook_full_name={get_target_workbook_full_name()} "
             f"target_sheet_count={get_target_sheet_count()} "
             f"active_workbook_name={get_active_workbook_name()} "
+            f"output_path={os.path.abspath(pszOutputPath)} "
+            f"output_file_state={get_file_state(os.path.abspath(pszOutputPath))} "
             f"source_workbook_name=<None> source_sheet_name=<None>",
         )
         write_log("INFO", f"Saving as = {pszOutputPath}")
         objTargetWorkbook.SaveAs(os.path.abspath(pszOutputPath), FileFormat=51)
         write_log("INFO", "Save complete")
+        objSavedWorkbook = None
+        try:
+            objSavedWorkbook = objExcel.Workbooks.Open(os.path.abspath(pszOutputPath))
+            write_diag_log(
+                "INFO",
+                "phase=T6 action=SAVEAS_VERIFY_OPEN "
+                f"saved_workbook_name={str(objSavedWorkbook.Name)} "
+                f"saved_workbook_sheet_count={str(objSavedWorkbook.Worksheets.Count)} "
+                f"saved_workbook_full_name={str(objSavedWorkbook.FullName)}",
+            )
+        finally:
+            if objSavedWorkbook is not None:
+                objSavedWorkbook.Close(SaveChanges=False)
         write_diag_log(
             "INFO",
             "phase=T6 action=SAVEAS_AFTER "
             f"target_workbook_name={get_target_workbook_name()} "
+            f"target_workbook_full_name={get_target_workbook_full_name()} "
             f"target_sheet_count={get_target_sheet_count()} "
             f"active_workbook_name={get_active_workbook_name()} "
+            f"output_path={os.path.abspath(pszOutputPath)} "
+            f"output_file_state={get_file_state(os.path.abspath(pszOutputPath))} "
             f"source_workbook_name=<None> source_sheet_name=<None>",
         )
     finally:
